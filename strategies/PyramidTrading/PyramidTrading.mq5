@@ -4,36 +4,24 @@
 #property copyright "Copyright 2026, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 
-// Import trading library
 #include <Trade/Trade.mqh>
-CTrade trade; // Create a trading object
+CTrade trade; 
 
-// ====== INPUT ======
-// Fixed lot size per trade
 input double LotSize = 0.02;
-
-// Store the last price opened price (used for 60 pip logic)
 double lastOpenPrice = 0;
 
-// ====== FUNCTIONS ======
-
-// Get current market price (BID price for Buy logic)
 double GetCurrentPrice() {
    return SymbolInfoDouble(Symbol(), SYMBOL_BID);
 }
 
-
-// Calculate distance between two prices in pips
 double GetDistancePips(double price1, double price2) {
    return (price1 - price2) / _Point / 10;
 }
 
-// ===== CLOSE ORDER LOGIC =====
 void ManageCloseOrder() {
-   // Loop through all open positions
    for(int i = PositionsTotal()-1; i>=0; i--) {
       ulong ticket = PositionGetTicket(i);
-      
+     
       if(PositionSelectByTicket(ticket)) {
          double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
          double volume = PositionGetDouble(POSITION_VOLUME);
@@ -59,50 +47,62 @@ void ManageCloseOrder() {
    }
 }
 
+double GetCandleLow(int shift) {
+   return iLow(Symbol(), PERIOD_H1, shift);
+}
 
-// ====== MAIN FUNCTION ======
+double PreviousLowH1() {
+   double lowestLow = GetCandleLow(1);
+   
+   for(int i=2; i<=10; i++) {
+      double candleLow = GetCandleLow(i);
+      
+      if(candleLow < lowestLow) {
+         lowestLow = candleLow;
+      }
+   }
+   return lowestLow;
+}
+
+void SetStopLossAll() {
+   double sl = PreviousLowH1();
+   
+   for(int i = PositionsTotal()-1; i>=0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      
+      if(PositionSelectByTicket(ticket)) {
+         double currentSL = PositionGetDouble(POSITION_SL);
+         
+         if(currentSL == 0) {
+            if(trade.PositionModify(ticket, sl, 0)) {
+               Print("SL set for ticket: ", ticket);
+            }
+         }
+      }
+   }
+}
+
 void OnTick() {
 
    ManageCloseOrder();
+   
+   SetStopLossAll();
 
-   // Get current price on every tick
    double currentPrice = GetCurrentPrice();
    
-   
-   // ====== OPEN FIRST ORDER ======
-   // If there are no open positions
    if(PositionsTotal() == 0) {
-      
-      // Open a Buy order
       if(trade.Buy(LotSize)) {
-         
-         // Save the price of this order
          lastOpenPrice = currentPrice;
-         
-         // Log message
-         Print("First Buy Opened");
+         Print("Buy Opened");
       }
-      
-      // Stop further execution for this tick
       return;
    }
-   
-   
-   // ====== CALCULATE DISTANCE ======
+
    double distance = GetDistancePips(currentPrice, lastOpenPrice);
-   
-   
-   // ====== OPEN NEXT ORDER ======
-   // Only open if price has moved UP at least 60 pips
+
    if(distance >= 60) {
-      
-      // Open another Buy order
       if(trade.Buy(LotSize)) {
-         
-         // Update last open price
          lastOpenPrice = currentPrice;
-         
-         // Log message
          Print("New Buy Opened at 60 pips");
       }
    }
