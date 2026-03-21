@@ -3,20 +3,17 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
-#property version   "1.00"
 
-// Import trading library (used for sending Buy/Sell orders)
+// Import trading library
 #include <Trade/Trade.mqh>
 CTrade trade; // Create a trading object
 
 // ====== INPUT ======
-// Lot size for each trade
+// Fixed lot size per trade
 input double LotSize = 0.02;
 
-// Store the price of the last opened order
-// Used to calculate the 60 pip distance
+// Store the last price opened price (used for 60 pip logic)
 double lastOpenPrice = 0;
-
 
 // ====== FUNCTIONS ======
 
@@ -27,19 +24,46 @@ double GetCurrentPrice() {
 
 
 // Calculate distance between two prices in pips
-// price1 = current price
-// price2 = last open price
 double GetDistancePips(double price1, double price2) {
    return (price1 - price2) / _Point / 10;
-   /*
-      _Point = smallest price unit (e.g. 0.00001)
-      divide by 10 = convert to standard pips (e.g. 0.00010 = 1 pip)
-   */
+}
+
+// ===== CLOSE ORDER LOGIC =====
+void ManageCloseOrder() {
+   // Loop through all open positions
+   for(int i = PositionsTotal()-1; i>=0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      
+      if(PositionSelectByTicket(ticket)) {
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double volume = PositionGetDouble(POSITION_VOLUME);
+         double currentPrice = GetCurrentPrice();
+         
+         double profitPips = (currentPrice - openPrice) / _Point / 10;
+         
+         if(profitPips >= 180) {
+            if(trade.PositionClose(ticket)) {
+               Print("Closed 100% | Ticket: ", ticket);
+            }
+         }
+         else if(profitPips >= 120) {
+            double closeLot = volume / 2;
+            
+            if(closeLot >= 0.01) {
+               if(trade.PositionClosePartial(ticket, closeLot)) {
+                  Print("Close 50% | Ticket: ", ticket);
+               }
+            }
+         }
+      }
+   }
 }
 
 
 // ====== MAIN FUNCTION ======
 void OnTick() {
+
+   ManageCloseOrder();
 
    // Get current price on every tick
    double currentPrice = GetCurrentPrice();
