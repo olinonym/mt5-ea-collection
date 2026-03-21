@@ -82,28 +82,98 @@ void SetStopLossAll() {
    }
 }
 
-void OnTick() {
-
-   ManageCloseOrder();
+double GetOrderRisk(double entry, double sl, double lot) {
+   double pips = (entry - sl) / _Point / 10;
+   double risk = pips * lot * 10;
    
-   SetStopLossAll();
+   return risk;
+}
 
+double GetTotalRisk() {
+   double totalRisk = 0;
+   
+   for(int i = PositionsTotal()-1; i>=0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      
+      if(PositionSelectByTicket(ticket)) {
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double sl = PositionGetDouble(POSITION_SL);
+         double lot = PositionGetDouble(POSITION_VOLUME);
+         
+         if(sl > 0) {
+            double risk = GetOrderRisk(openPrice, sl, lot);
+            totalRisk += risk;
+         }
+      }
+   }
+   return totalRisk;
+}
+
+bool CheckTotalRisk(double newRisk) {
+   double totalRisk = GetTotalRisk();
+   
+   if(totalRisk + newRisk <= 50)
+      return true;
+   
+   return false;
+}
+
+void ShowRiskInfo(double newRisk) {
+   double totalRisk = GetTotalRisk();
+   
+   Print("New Order Risk: $", DoubleToString(newRisk, 2));
+   Print("Total Risk (before): $", DoubleToString(totalRisk, 2));
+   Print("Total Risk (after): $", DoubleToString(totalRisk + newRisk, 2));
+}
+
+void OnTick() {
+   ManageCloseOrder();
+   SetStopLossAll();
+   
    double currentPrice = GetCurrentPrice();
    
    if(PositionsTotal() == 0) {
-      if(trade.Buy(LotSize)) {
-         lastOpenPrice = currentPrice;
-         Print("Buy Opened");
+      double sl = PreviousLowH1();
+      
+      if(sl >= currentPrice)
+         return;
+         
+      double newRisk = GetOrderRisk(currentPrice, sl, LotSize);
+      
+      ShowRiskInfo(newRisk);
+      
+      if(CheckTotalRisk(newRisk)) {
+         if(trade.Buy(LotSize)) {
+            lastOpenPrice = currentPrice;
+            Print("First Buy Opened");
+         }
+      }
+      else {
+         Print("Skip first order - Risk too high");
       }
       return;
    }
-
+   
    double distance = GetDistancePips(currentPrice, lastOpenPrice);
-
-   if(distance >= 60) {
-      if(trade.Buy(LotSize)) {
-         lastOpenPrice = currentPrice;
-         Print("New Buy Opened at 60 pips");
+   
+   if(distance >= 60) { 
+      double sl = PreviousLowH1();
+      
+      if(sl >= currentPrice)
+         return;
+         
+      double newRisk = GetOrderRisk(currentPrice, sl, LotSize);
+      
+      ShowRiskInfo(newRisk);
+        
+      if(CheckTotalRisk(newRisk)) {
+         if(trade.Buy(LotSize)) {
+            lastOpenPrice = currentPrice;
+            Print("New Buy Opened (Risk Ok)");
+         }
+      }
+      else {
+         Print("Risk too high - skip order");
       }
    }
 }
