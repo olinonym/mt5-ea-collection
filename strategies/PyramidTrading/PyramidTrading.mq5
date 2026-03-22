@@ -1,4 +1,4 @@
-//+------------------------------------------------------------------+
+﻿//+------------------------------------------------------------------+
 //|                                               PyramidTrading.mq5 |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, MetaQuotes Ltd."
@@ -126,20 +126,49 @@ void ShowRiskInfo(double newRisk) {
    Print("Total Risk (after): $", DoubleToString(totalRisk + newRisk, 2));
 }
 
+void TrailingSL() {
+   double triggerPips = 60;   
+   double lockPips = 10;   
+
+   for(int i = PositionsTotal()-1; i>=0; i--) {
+      ulong ticket = PositionGetTicket(i);
+
+      if(PositionSelectByTicket(ticket)) {
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double current   = GetCurrentPrice();
+         double slCurrent = PositionGetDouble(POSITION_SL);
+         
+         double profitPips = (current - openPrice) / _Point / 10;
+         
+         if(profitPips >= triggerPips) {
+            double newSL = openPrice + (lockPips * 10 * _Point);
+            
+            if(slCurrent < newSL) {
+               if(trade.PositionModify(ticket, newSL, 0)) {
+                  Print("Trailing SL updated to: ", newSL);
+               }
+               else {
+                  Print("Modify failed: ", GetLastError());
+               }
+            } 
+         }
+      }
+   }
+}
+
 void OnTick() {
    ManageCloseOrder();
    SetStopLossAll();
+   TrailingSL();
    
    double currentPrice = GetCurrentPrice();
    
    if(PositionsTotal() == 0) {
       double sl = PreviousLowH1();
       
-      if(sl >= currentPrice)
-         return;
+      if(sl >= currentPrice) return;
          
       double newRisk = GetOrderRisk(currentPrice, sl, LotSize);
-      
       ShowRiskInfo(newRisk);
       
       if(CheckTotalRisk(newRisk)) {
@@ -147,9 +176,6 @@ void OnTick() {
             lastOpenPrice = currentPrice;
             Print("First Buy Opened");
          }
-      }
-      else {
-         Print("Skip first order - Risk too high");
       }
       return;
    }
@@ -159,11 +185,9 @@ void OnTick() {
    if(distance >= 60) { 
       double sl = PreviousLowH1();
       
-      if(sl >= currentPrice)
-         return;
+      if(sl >= currentPrice) return;
          
       double newRisk = GetOrderRisk(currentPrice, sl, LotSize);
-      
       ShowRiskInfo(newRisk);
         
       if(CheckTotalRisk(newRisk)) {
