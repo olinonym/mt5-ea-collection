@@ -13,16 +13,25 @@ input double BalanceStep     = 500.0; // ขยับ lot ทุกๆ balance �
 input double InitialBalance  = 0.0;   // Balance ตอนเริ่มต้น (0 = ดึงอัตโนมัติ)
 input double TotalRiskCapPct = 3.0;   // Total risk สูงสุด (% ของ Equity)
 input int    EMA_Period      = 50;    // Period ของ EMA H4
+input double DailyDDLimitPct = 2.0;   // หยุดเทรดถ้า equity ลดเกินกี่ % ต่อวัน
+input double MaxDDLimitPct   = 10.0;  // หยุดถาวรถ้า equity ลดเกินกี่ % จาก starting balance
 
-double lastOpenPrice   = 0;
-double startingBalance = 0;
-int    emaHandle       = INVALID_HANDLE;
+double   dailyStartEquity = 0;
+bool     maxDDBreached    = false;
+
+double   lastOpenPrice   = 0;
+double   startingBalance = 0;
+int      emaHandle       = INVALID_HANDLE;
+datetime lastH4Time      = 0;
 
 // ==========================================
 
 int OnInit() {
+
+   
    startingBalance = (InitialBalance > 0) ? InitialBalance
                                           : AccountInfoDouble(ACCOUNT_BALANCE);
+   dailyStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    Print("Starting balance: $", DoubleToString(startingBalance, 2));
 
    emaHandle = iMA(Symbol(), PERIOD_H4, EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
@@ -221,29 +230,88 @@ void TrailingSL() {
    }
 }
 
+bool IsNewH4Candle() {
+   datetime currentH4Time = iTime(Symbol(), PERIOD_H4, 0);
+   if(currentH4Time != lastH4Time) {
+      lastH4Time = currentH4Time;
+      return true;
+   }
+   return false;
+}
+
+bool IsDailyDDBreached() {
+   double equity       = AccountInfoDouble(ACCOUNT_EQUITY);
+   double ddPct        = (dailyStartEquity - equity) / dailyStartEquity * 100.0;
+
+   if(ddPct >= DailyDDLimitPct) {
+      Print("⛔ Daily DD limit reached: ", DoubleToString(ddPct, 2),
+            "% (max ", DailyDDLimitPct, "%) — stop trading today");
+      return true;
+   }
+   return false;
+}
+
+bool IsMaxDDBreached() {
+   if(maxDDBreached) {
+      Print("⛔ Max DD already breached — manual reset required");
+      return true;
+   }
+
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double ddPct   = (startingBalance - equity) / startingBalance * 100.0;
+
+   if(ddPct >= MaxDDLimitPct) {
+      maxDDBreached = true;
+      Print("🚨 Max DD breached: ", DoubleToString(ddPct, 2),
+            "% (max ", MaxDDLimitPct, "%) — EA stopped, reset InitialBalance to resume");
+      return true;
+   }
+   return false;
+}
+
 // ==========================================
 // OnTick
 // ==========================================
 
 void OnTick() {
+   // reset daily equity ทุกวันตอนเที่ยงคืน
+   static datetime lastDay = 0;
+   datetime today = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+   if(today != lastDay) {
+      lastDay          = today;
+      dailyStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+      Print("📅 New day — daily equity reset: $", DoubleToString(dailyStartEquity, 2));
+   }
+
    ManageCloseOrder();
    SetStopLossAll();
    TrailingSL();
 
-   // กรอง EMA ก่อนทุกอย่าง
-   if(!IsH4Uptrend()) return;
+   // ชั้น 2: max DD — hard stop ถาวร
+   if(IsMaxDDBreached()) return;
+
+   // ชั้น 1: daily DD — หยุดแค่วันนี้
+   if(IsDailyDDBreached()) return;
+
+   // EMA filter
+   static bool h4Signal = false;
+   datetime currentH4Time = iTime(Symbol(), PERIOD_H4, 0);
+   if(currentH4Time != lastH4Time) {
+      lastH4Time = currentH4Time;
+      h4Signal   = IsH4Uptrend();
+   }
+   if(!h4Signal) return;
 
    double currentPrice = GetCurrentPrice();
    double sl           = PreviousLowH1();
-
    if(sl >= currentPrice) return;
 
    double lot     = GetCurrentLot();
    double newRisk = GetOrderRisk(currentPrice, sl, lot);
 
    if(PositionsTotal() == 0) {
-      ShowRiskInfo(lot, newRisk);
       if(CheckTotalRisk(newRisk)) {
+         ShowRiskInfo(lot, newRisk);
          if(trade.Buy(lot)) {
             lastOpenPrice = currentPrice;
             Print("First Buy | Lot: ", DoubleToString(lot, 2));
@@ -255,8 +323,8 @@ void OnTick() {
 
    double distance = GetDistancePips(currentPrice, lastOpenPrice);
    if(distance >= 60) {
-      ShowRiskInfo(lot, newRisk);
       if(CheckTotalRisk(newRisk)) {
+         ShowRiskInfo(lot, newRisk);
          if(trade.Buy(lot)) {
             lastOpenPrice = currentPrice;
             Print("New Buy | Lot: ", DoubleToString(lot, 2), " | Risk Ok");
