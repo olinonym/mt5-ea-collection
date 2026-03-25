@@ -15,11 +15,9 @@ input double TotalRiskCapPct = 3.0;   // Total risk สูงสุด (% ขอ
 input int    EMA_Period      = 50;    // Period ของ EMA H4
 input double DailyDDLimitPct = 2.0;  // หยุดเทรดถ้า equity ลดเกินกี่ % ต่อวัน
 input double MaxDDLimitPct   = 10.0; // หยุดถาวรถ้า equity ลดเกินกี่ % จาก starting balance
-input double EMAGapPips      = 15.0; // close ต้องห่าง EMA อย่างน้อย (pips)
-input double EMASlopeMin     = 5.0;  // EMA slope ขั้นต่ำ (pips) — ถ้าน้อยกว่านี้ถือว่าแบน
-input double BodyRatioMin    = 70.0; // body ต้องเกินกี่ % ของ range
-input double ATRMultiplier   = 1.3;  // range ต้องเกิน ATR กี่เท่า
-input int    ATR_Period      = 14;   // Period ของ ATR
+input double EMAGapPips      = 5.0; // close ต้องห่าง EMA อย่างน้อย (pips)
+input double EMASlopeMin     = 2.0;  // EMA slope ขั้นต่ำ (pips) — ถ้าน้อยกว่านี้ถือว่าแบน
+input double BodyRatioMin    = 50.0; // body ต้องเกินกี่ % ของ range
 
 double   dailyStartEquity = 0;
 bool     maxDDBreached    = false;
@@ -43,18 +41,11 @@ int OnInit() {
       return INIT_FAILED;
    }
 
-   atrHandle = iATR(Symbol(), PERIOD_H4, ATR_Period);
-   if(atrHandle == INVALID_HANDLE) {
-      Print("Failed to create ATR handle");
-      return INIT_FAILED;
-   }
-
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason) {
    if(emaHandle != INVALID_HANDLE) IndicatorRelease(emaHandle);
-   if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
 }
 
 double GetCurrentPrice() {
@@ -121,14 +112,6 @@ bool IsH4Uptrend() {
       return false;
    }
 
-   // เงื่อนไข 4: Higher High — high[1] > high[2] และ high[1] > high[0]
-   if(h4High1 <= h4High2 || h4High1 <= h4High0) {
-      Print("H4 filter: no Higher High — high[1]=", DoubleToString(h4High1, _Digits),
-            " left=",  DoubleToString(h4High2, _Digits),
-            " right=", DoubleToString(h4High0, _Digits));
-      return false;
-   }
-
    // เงื่อนไข 5: body > BodyRatioMin % ของ range
    double body  = h4Close1 - h4Open1;
    double range = h4High1  - h4Low1;
@@ -142,19 +125,10 @@ bool IsH4Uptrend() {
       return false;
    }
 
-   // เงื่อนไข 6: range > ATRMultiplier × ATR
-   if(range < ATRMultiplier * atr) {
-      Print("H4 filter: range too small — ", DoubleToString(range / _Point / 10, 1),
-            " pips vs ATR×", ATRMultiplier, "=",
-            DoubleToString(ATRMultiplier * atr / _Point / 10, 1));
-      return false;
-   }
-
    Print("H4 filter: passed ✓",
          " | gap=",   DoubleToString(gapPips, 1),   " pips",
          " | slope=", DoubleToString(slopePips, 1), " pips",
-         " | body=",  DoubleToString(bodyRatio, 1), "%",
-         " | range=", DoubleToString(range / _Point / 10, 1), " pips");
+         " | body=",  DoubleToString(bodyRatio, 1), "%");
    return true;
 }
 
@@ -359,11 +333,23 @@ void OnTick() {
       lastH4Time = currentH4Time;
       h4Signal   = IsH4Uptrend();
    }
-   if(!h4Signal) return;
+   //if(!h4Signal) return;
 
    double currentPrice = GetCurrentPrice();
    double sl           = PreviousLowH1();
    if(sl >= currentPrice) return;
+   
+   // ===== EMA FILTER =====
+   double emaNow[];
+   if(CopyBuffer(emaHandle, 0, 0, 1, emaNow) <= 0) return;
+
+   double ema = emaNow[0];
+
+   // ❌ ถ้าอยู่ใต้ EMA → ไม่เทรดเลย
+   if(currentPrice <= ema) return;
+   
+   double close1 = iClose(Symbol(), PERIOD_H4, 1);
+   if(close1 <= ema) return;
 
    double lot     = GetCurrentLot();
    double newRisk = GetOrderRisk(currentPrice, sl, lot);
