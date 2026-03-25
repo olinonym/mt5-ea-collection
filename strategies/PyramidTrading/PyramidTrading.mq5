@@ -64,7 +64,6 @@ bool IsH4Uptrend() {
    // ดึง EMA 6 ค่า shift 1-6
    double emaVal[6];
    if(CopyBuffer(emaHandle, 0, 1, 6, emaVal) <= 0) {
-      Print("EMA copy failed: ", GetLastError());
       return false;
    }
    // emaVal[0]=shift1, emaVal[1]=shift2, ..., emaVal[4]=shift5
@@ -72,63 +71,36 @@ bool IsH4Uptrend() {
    double ema1 = emaVal[0];
    double ema5 = emaVal[4];
 
-   // ดึง ATR
-   double atrVal[1];
-   if(CopyBuffer(atrHandle, 0, 1, 1, atrVal) <= 0) {
-      Print("ATR copy failed: ", GetLastError());
-      return false;
-   }
-   double atr = atrVal[0];
-
    double h4Close1 = iClose(Symbol(), PERIOD_H4, 1);
-   double h4Close2 = iClose(Symbol(), PERIOD_H4, 2);
    double h4Open1  = iOpen (Symbol(), PERIOD_H4, 1);
    double h4High1  = iHigh (Symbol(), PERIOD_H4, 1);
    double h4Low1   = iLow  (Symbol(), PERIOD_H4, 1);
-   double h4High2  = iHigh (Symbol(), PERIOD_H4, 2);
-   double h4High0  = iHigh (Symbol(), PERIOD_H4, 0);
 
-   // เงื่อนไข 1: ยืนเหนือ EMA 2 แท่งติดกัน
+
    if(h4Close1 <= ema1) {
-      Print("H4 filter: close[1] below EMA"); return false;
-   }
-   if(h4Close2 <= emaVal[1]) {
-      Print("H4 filter: close[2] below EMA"); return false;
-   }
-
-   // เงื่อนไข 2: ห่าง EMA อย่างน้อย EMAGapPips
-   double gapPips = (h4Close1 - ema1) / _Point / 10;
-   if(gapPips < EMAGapPips) {
-      Print("H4 filter: too close to EMA — ", DoubleToString(gapPips, 1),
-            " pips (min ", EMAGapPips, ")");
       return false;
    }
-
-   // เงื่อนไข 3: EMA slope ต้องชี้ขึ้น
+   
    double slopePips = (ema1 - ema5) / _Point / 10;
-   if(slopePips < EMASlopeMin) {
-      Print("H4 filter: EMA slope too flat — ", DoubleToString(slopePips, 1),
-            " pips (min ", EMASlopeMin, ")");
-      return false;
+   if(slopePips <= 0) return false;
+   
+   if(h4Close1 <= h4Open1) return false;
+   
+   double body = h4Close1 - h4Open1;
+   double range = h4High1 - h4Low1;
+   if(range <= 0) return false;
+   
+   double BodyRatio = (body / range) * 100.0;
+   if(BodyRatio < BodyRatioMin) return false;
+   
+   double recentLow = iLow(Symbol(), PERIOD_H4, 1);
+   for(int i=2; i<=5; i++) {
+      double low = iLow(Symbol(), PERIOD_H4, i);
+      if(low < recentLow) recentLow = low;
    }
-
-   // เงื่อนไข 5: body > BodyRatioMin % ของ range
-   double body  = h4Close1 - h4Open1;
-   double range = h4High1  - h4Low1;
-   if(body <= 0 || range <= 0) {
-      Print("H4 filter: invalid candle"); return false;
-   }
-   double bodyRatio = (body / range) * 100.0;
-   if(bodyRatio < BodyRatioMin) {
-      Print("H4 filter: body too small — ", DoubleToString(bodyRatio, 1),
-            "% (min ", BodyRatioMin, "%)");
-      return false;
-   }
-
-   Print("H4 filter: passed ✓",
-         " | gap=",   DoubleToString(gapPips, 1),   " pips",
-         " | slope=", DoubleToString(slopePips, 1), " pips",
-         " | body=",  DoubleToString(bodyRatio, 1), "%");
+   
+   if(h4Close1 <= recentLow) return false;
+   
    return true;
 }
 
@@ -333,7 +305,8 @@ void OnTick() {
       lastH4Time = currentH4Time;
       h4Signal   = IsH4Uptrend();
    }
-   //if(!h4Signal) return;
+   if(!h4Signal) return;
+ 
 
    double currentPrice = GetCurrentPrice();
    double sl           = PreviousLowH1();
@@ -348,13 +321,20 @@ void OnTick() {
    // ❌ ถ้าอยู่ใต้ EMA → ไม่เทรดเลย
    if(currentPrice <= ema) return;
    
-   double close1 = iClose(Symbol(), PERIOD_H4, 1);
-   if(close1 <= ema) return;
+   double recentLow = iLow(Symbol(), PERIOD_H4, 1);
+   for(int i=2; i<=5; i++) {
+      double low = iLow(Symbol(), PERIOD_H4, i);
+      if(low < recentLow) recentLow = low;
+   }
+   
+   if(currentPrice <= recentLow) return;
 
    double lot     = GetCurrentLot();
    double newRisk = GetOrderRisk(currentPrice, sl, lot);
 
    if(PositionsTotal() == 0) {
+      if(!h4Signal) return;
+      
       if(CheckTotalRisk(newRisk)) {
          ShowRiskInfo(lot, newRisk);
          if(trade.Buy(lot)) {
